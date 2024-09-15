@@ -309,6 +309,11 @@ func (c *Template) buildHTTP() {
 			fmt.Sprintf("@custom_upstream-default-backend_%d", v)))
 	}
 
+	for _, server := range c.tplConfig.Servers {
+		serverBlock := c.buildServerDirective(server)
+		httpBlock = append(httpBlock, serverBlock)
+	}
+
 	c.config.Parsed = append(c.config.Parsed, &ngx_crossplane.Directive{
 		Directive: "http",
 		Block:     httpBlock,

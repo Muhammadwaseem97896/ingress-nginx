@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	ngx_crossplane "github.com/nginxinc/nginx-go-crossplane"
 
@@ -140,4 +141,91 @@ func shouldLoadOpentelemetryModule(servers []*ingress.Server) bool {
 		}
 	}
 	return false
+}
+
+func buildServerName(hostname string) string {
+	if !strings.HasPrefix(hostname, "*") {
+		return hostname
+	}
+
+	hostname = strings.Replace(hostname, "*.", "", 1)
+	parts := strings.Split(hostname, ".")
+
+	return `~^(?<subdomain>[\w-]+)\.` + strings.Join(parts, "\\.") + `$`
+}
+
+func buildListener(tc config.TemplateConfig, hostname string) ngx_crossplane.Directives {
+	listenDirectives := make(ngx_crossplane.Directives, 0)
+
+	co := commonListenOptions(&tc, hostname)
+
+	addrV4 := []string{""}
+	if len(tc.Cfg.BindAddressIpv4) > 0 {
+		addrV4 = tc.Cfg.BindAddressIpv4
+	}
+	listenDirectives = append(listenDirectives, httpListener(addrV4, co, &tc, false)...)
+	listenDirectives = append(listenDirectives, httpListener(addrV4, co, &tc, true)...)
+
+	if tc.IsIPV6Enabled {
+		addrV6 := []string{"[::]"}
+		if len(tc.Cfg.BindAddressIpv6) > 0 {
+			addrV6 = tc.Cfg.BindAddressIpv6
+		}
+		listenDirectives = append(listenDirectives, httpListener(addrV6, co, &tc, false)...)
+		listenDirectives = append(listenDirectives, httpListener(addrV6, co, &tc, true)...)
+	}
+
+	return listenDirectives
+}
+
+// commonListenOptions defines the common directives that should be added to NGINX listeners
+func commonListenOptions(template *config.TemplateConfig, hostname string) []string {
+	var out []string
+
+	if template.Cfg.UseProxyProtocol {
+		out = append(out, "proxy_protocol")
+	}
+
+	if hostname != "_" {
+		return out
+	}
+
+	out = append(out, "default_server")
+
+	if template.Cfg.ReusePort {
+		out = append(out, "reuseport")
+	}
+	out = append(out, fmt.Sprintf("backlog=%d", template.BacklogSize))
+	return out
+}
+
+func httpListener(addresses []string, co []string, tc *config.TemplateConfig, ssl bool) ngx_crossplane.Directives {
+	listeners := make(ngx_crossplane.Directives, 0)
+	port := tc.ListenPorts.HTTP
+	isTLSProxy := tc.IsSSLPassthroughEnabled
+	// If this is a SSL listener we should mutate the port properly
+	if ssl {
+		port = tc.ListenPorts.HTTPS
+		if isTLSProxy {
+			port = tc.ListenPorts.SSLProxy
+		}
+	}
+	for _, address := range addresses {
+		var listenAddress string
+		if address == "" {
+			listenAddress = fmt.Sprintf("%d", port)
+		} else {
+			listenAddress = fmt.Sprintf("%s:%d", address, port)
+		}
+		if ssl {
+			if isTLSProxy {
+				co = append(co, "proxy_protocol")
+			}
+			co = append(co, "ssl")
+		}
+		listenDirective := buildDirective("listen", listenAddress, co)
+		listeners = append(listeners, listenDirective)
+	}
+
+	return listeners
 }

@@ -567,31 +567,26 @@ http {
     {{ range $server := $servers }}
     ## start server {{ $server.Hostname }}
     server {
-        server_name {{ buildServerName $server.Hostname }} {{range $server.Aliases }}{{ . }} {{ end }};
+        server_name {{ buildServerName $server.Hostname }} {{range $server.Aliases }}{{ . }} {{ end }}; OK
 
         {{ if $cfg.UseHTTP2 }}
-            http2 on;
+            http2 on; OK
         {{ end }}
 
         {{ if gt (len $cfg.BlockUserAgents) 0 }}
-        if ($block_ua) {
-           return 403;
+        if ($block_ua) { OK
+           return 403; OK 
         }
         {{ end }}
         {{ if gt (len $cfg.BlockReferers) 0 }}
-        if ($block_ref) {
-           return 403;
+        if ($block_ref) { OK
+           return 403; OK
         }
         {{ end }}
 
         {{ template "SERVER" serverConfig $all $server }}
 
-        {{ if not (empty $cfg.ServerSnippet) }}
-        # Custom code snippet configured in the configuration configmap
-        {{ $cfg.ServerSnippet }}
-        {{ end }}
-
-        {{ template "CUSTOM_ERRORS" (buildCustomErrorDeps "upstream-default-backend" $cfg.CustomHTTPErrors $all.EnableMetrics $cfg.EnableModsecurity) }}
+        {{ template "CUSTOM_ERRORS" (buildCustomErrorDeps "upstream-default-backend" $cfg.CustomHTTPErrors $all.EnableMetrics) }} # OK
     }
     ## end server {{ $server.Hostname }}
 
@@ -612,10 +607,6 @@ http {
 
     # default server, used for NGINX healthcheck and access to nginx stats
     server {
-        # Ensure that modsecurity will not run on an internal location as this is not accessible from outside
-        {{ if $all.Cfg.EnableModsecurity }}
-        modsecurity off;
-        {{ end }}
 
         listen 127.0.0.1:{{ .StatusPort }};
         set $proxy_upstream_name "internal";
@@ -654,147 +645,33 @@ http {
     }
 }
 
-stream {
-    lua_package_path "/etc/nginx/lua/?.lua;/etc/nginx/lua/vendor/?.lua;;";
-
-    lua_shared_dict tcp_udp_configuration_data 5M;
-    
-    {{ buildResolvers $cfg.Resolver $cfg.DisableIpv6DNS }}
-
-    init_by_lua_file /etc/nginx/lua/ngx_conf_init_stream.lua;
-
-    init_worker_by_lua_file /etc/nginx/lua/nginx/ngx_conf_init_tcp_udp.lua;
-
-    lua_add_variable $proxy_upstream_name;
-
-    log_format log_stream '{{ $cfg.LogFormatStream }}';
-
-    {{ if or $cfg.DisableAccessLog $cfg.DisableStreamAccessLog }}
-    access_log off;
-    {{ else }}
-    access_log {{ or $cfg.StreamAccessLogPath $cfg.AccessLogPath }} log_stream {{ $cfg.AccessLogParams }};
-    {{ end }}
-
-
-    error_log  {{ $cfg.ErrorLogPath }} {{ $cfg.ErrorLogLevel }};
-    {{ if $cfg.EnableRealIP }}
-    {{ range $trusted_ip := $cfg.ProxyRealIPCIDR }}
-    set_real_ip_from    {{ $trusted_ip }};
-    {{ end }}
-    {{ end }}
-
-    upstream upstream_balancer {
-        server 0.0.0.1:1234; # placeholder
-        balancer_by_lua_file /etc/nginx/lua/nginx/ngx_conf_balancer_tcp_udp.lua;
-    }
-
-    server {
-        listen 127.0.0.1:{{ .StreamPort }};
-
-        access_log off;
-
-        content_by_lua_file /etc/nginx/lua/nginx/ngx_conf_content_tcp_udp.lua;
-    }
-
-    # TCP services
-    {{ range $tcpServer := .TCPBackends }}
-    server {
-        preread_by_lua_block {
-            ngx.var.proxy_upstream_name="tcp-{{ $tcpServer.Backend.Namespace }}-{{ $tcpServer.Backend.Name }}-{{ $tcpServer.Backend.Port }}";
-        }
-
-        {{ range $address := $all.Cfg.BindAddressIpv4 }}
-        listen                  {{ $address }}:{{ $tcpServer.Port }}{{ if $tcpServer.Backend.ProxyProtocol.Decode }} proxy_protocol{{ end }};
-        {{ else }}
-        listen                  {{ $tcpServer.Port }}{{ if $tcpServer.Backend.ProxyProtocol.Decode }} proxy_protocol{{ end }};
-        {{ end }}
-        {{ if $IsIPV6Enabled }}
-        {{ range $address := $all.Cfg.BindAddressIpv6 }}
-        listen                  {{ $address }}:{{ $tcpServer.Port }}{{ if $tcpServer.Backend.ProxyProtocol.Decode }} proxy_protocol{{ end }};
-        {{ else }}
-        listen                  [::]:{{ $tcpServer.Port }}{{ if $tcpServer.Backend.ProxyProtocol.Decode }} proxy_protocol{{ end }};
-        {{ end }}
-        {{ end }}
-        proxy_timeout           {{ $cfg.ProxyStreamTimeout }};
-        proxy_next_upstream     {{ if $cfg.ProxyStreamNextUpstream }}on{{ else }}off{{ end }};
-        proxy_next_upstream_timeout {{ $cfg.ProxyStreamNextUpstreamTimeout }};
-        proxy_next_upstream_tries   {{ $cfg.ProxyStreamNextUpstreamTries }};
-
-        proxy_pass              upstream_balancer;
-        {{ if $tcpServer.Backend.ProxyProtocol.Encode }}
-        proxy_protocol          on;
-        {{ end }}
-    }
-    {{ end }}
-
-    # UDP services
-    {{ range $udpServer := .UDPBackends }}
-    server {
-        preread_by_lua_block {
-            ngx.var.proxy_upstream_name="udp-{{ $udpServer.Backend.Namespace }}-{{ $udpServer.Backend.Name }}-{{ $udpServer.Backend.Port }}";
-        }
-
-        {{ range $address := $all.Cfg.BindAddressIpv4 }}
-        listen                  {{ $address }}:{{ $udpServer.Port }} udp;
-        {{ else }}
-        listen                  {{ $udpServer.Port }} udp;
-        {{ end }}
-        {{ if $IsIPV6Enabled }}
-        {{ range $address := $all.Cfg.BindAddressIpv6 }}
-        listen                  {{ $address }}:{{ $udpServer.Port }} udp;
-        {{ else }}
-        listen                  [::]:{{ $udpServer.Port }} udp;
-        {{ end }}
-        {{ end }}
-        proxy_responses         {{ $cfg.ProxyStreamResponses }};
-        proxy_timeout           {{ $cfg.ProxyStreamTimeout }};
-        proxy_next_upstream     {{ if $cfg.ProxyStreamNextUpstream }}on{{ else }}off{{ end }};
-        proxy_next_upstream_timeout {{ $cfg.ProxyStreamNextUpstreamTimeout }};
-        proxy_next_upstream_tries   {{ $cfg.ProxyStreamNextUpstreamTries }};
-        proxy_pass              upstream_balancer;
-    }
-    {{ end }}
-
-    # Stream Snippets
-    {{ range $snippet := .StreamSnippets }}
-    {{ $snippet }}
-    {{ end }}
-}
-
 {{/* definition of templates to avoid repetitions */}}
 {{ define "CUSTOM_ERRORS" }}
         {{ $enableMetrics := .EnableMetrics }}
-        {{ $modsecurityEnabled := .ModsecurityEnabled }}
         {{ $upstreamName := .UpstreamName }}
         {{ range $errCode := .ErrorCodes }}
-        location @custom_{{ $upstreamName }}_{{ $errCode }} {
-            internal;
+        location @custom_{{ $upstreamName }}_{{ $errCode }} { # OK
+            internal; # OK
+            proxy_intercept_errors off; # OK
 
-            # Ensure that modsecurity will not run on custom error pages or they might be blocked
-            {{ if $modsecurityEnabled }}
-            modsecurity off;
-            {{ end }}
+            proxy_set_header       X-Code             {{ $errCode }}; # OK
+            proxy_set_header       X-Format           $http_accept; # OK
+            proxy_set_header       X-Original-URI     $request_uri; # OK
+            proxy_set_header       X-Namespace        $namespace; # OK
+            proxy_set_header       X-Ingress-Name     $ingress_name; # OK
+            proxy_set_header       X-Service-Name     $service_name;# OK
+            proxy_set_header       X-Service-Port     $service_port; # OK
+            proxy_set_header       X-Request-ID       $req_id;# OK
+            proxy_set_header       X-Forwarded-For    $remote_addr; # OK
+            proxy_set_header       Host               $best_http_host; # OK
 
-            proxy_intercept_errors off;
+            set $proxy_upstream_name {{ $upstreamName | quote }}; # OK
 
-            proxy_set_header       X-Code             {{ $errCode }};
-            proxy_set_header       X-Format           $http_accept;
-            proxy_set_header       X-Original-URI     $request_uri;
-            proxy_set_header       X-Namespace        $namespace;
-            proxy_set_header       X-Ingress-Name     $ingress_name;
-            proxy_set_header       X-Service-Name     $service_name;
-            proxy_set_header       X-Service-Port     $service_port;
-            proxy_set_header       X-Request-ID       $req_id;
-            proxy_set_header       X-Forwarded-For    $remote_addr;
-            proxy_set_header       Host               $best_http_host;
+            rewrite                (.*) / break; # OK
 
-            set $proxy_upstream_name {{ $upstreamName | quote }};
-
-            rewrite                (.*) / break;
-
-            proxy_pass            http://upstream_balancer;
+            proxy_pass            http://upstream_balancer; # OK
             {{ if $enableMetrics }}
-            log_by_lua_file /etc/nginx/lua/nginx/ngx_conf_log.lua;
+            log_by_lua_file /etc/nginx/lua/nginx/ngx_conf_log.lua; # OK
             {{ end }}
         }
         {{ end }}
@@ -838,82 +715,77 @@ stream {
         {{ $all := .First }}
         {{ $server := .Second }}
 
-        {{ buildHTTPListener  $all $server.Hostname }}
-        {{ buildHTTPSListener $all $server.Hostname }}
+        {{ buildHTTPListener  $all $server.Hostname }} #  OK
+        {{ buildHTTPSListener $all $server.Hostname }} # OK
 
-        set $proxy_upstream_name "-";
+        set $proxy_upstream_name "-"; # OK
 
         {{ if not ( empty $server.CertificateAuth.MatchCN ) }}
         {{ if gt (len $server.CertificateAuth.MatchCN) 0 }}
-        if ( $ssl_client_s_dn !~ {{ $server.CertificateAuth.MatchCN }} ) {
-            return 403 "client certificate unauthorized";
+        if ( $ssl_client_s_dn !~ {{ $server.CertificateAuth.MatchCN }} ) { # OK
+            return 403 "client certificate unauthorized"; # OK
         }
         {{ end }}
         {{ end }}
 
         {{ if eq $server.Hostname "_" }}
-        ssl_reject_handshake {{ if $all.Cfg.SSLRejectHandshake }}on{{ else }}off{{ end }};
+        ssl_reject_handshake {{ if $all.Cfg.SSLRejectHandshake }}on{{ else }}off{{ end }}; # OK
         {{ end }}
 
-        ssl_certificate_by_lua_file /etc/nginx/lua/nginx/ngx_conf_certificate.lua;
+        ssl_certificate_by_lua_file /etc/nginx/lua/nginx/ngx_conf_certificate.lua; # OK
 
         {{ if not (empty $server.AuthTLSError) }}
-        # {{ $server.AuthTLSError }}
+        # {{ $server.AuthTLSError }} # NOTOK, WHERE THIS IF ENDS?? Couldn't reproduce this config on my ingress
         return 403;
         {{ else }}
 
         {{ if not (empty $server.CertificateAuth.CAFileName) }}
         # PEM sha: {{ $server.CertificateAuth.CASHA }}
-        ssl_client_certificate                  {{ $server.CertificateAuth.CAFileName }};
-        ssl_verify_client                       {{ $server.CertificateAuth.VerifyClient }};
-        ssl_verify_depth                        {{ $server.CertificateAuth.ValidationDepth }};
+        ssl_client_certificate                  {{ $server.CertificateAuth.CAFileName }}; # OK
+        ssl_verify_client                       {{ $server.CertificateAuth.VerifyClient }}; # OK
+        ssl_verify_depth                        {{ $server.CertificateAuth.ValidationDepth }}; # OK
 
         {{ if not (empty $server.CertificateAuth.CRLFileName) }}
         # PEM sha: {{ $server.CertificateAuth.CRLSHA }}
-        ssl_crl                                 {{ $server.CertificateAuth.CRLFileName }};
+        ssl_crl                                 {{ $server.CertificateAuth.CRLFileName }}; # OK
         {{ end }}
 
         {{ if not (empty $server.CertificateAuth.ErrorPage)}}
-        error_page 495 496 = {{ $server.CertificateAuth.ErrorPage }};
+        error_page 495 496 = {{ $server.CertificateAuth.ErrorPage }}; # OK
         {{ end }}
         {{ end }}
 
         {{ if not (empty $server.ProxySSL.CAFileName) }}
         # PEM sha: {{ $server.ProxySSL.CASHA }}
-        proxy_ssl_trusted_certificate           {{ $server.ProxySSL.CAFileName }};
-        proxy_ssl_ciphers                       {{ $server.ProxySSL.Ciphers }};
-        proxy_ssl_protocols                     {{ $server.ProxySSL.Protocols }};
-        proxy_ssl_verify                        {{ $server.ProxySSL.Verify }};
-        proxy_ssl_verify_depth                  {{ $server.ProxySSL.VerifyDepth }};
+        proxy_ssl_trusted_certificate           {{ $server.ProxySSL.CAFileName }}; # OK
+        proxy_ssl_ciphers                       {{ $server.ProxySSL.Ciphers }}; # OK
+        proxy_ssl_protocols                     {{ $server.ProxySSL.Protocols }}; # OK
+        proxy_ssl_verify                        {{ $server.ProxySSL.Verify }}; # OK
+        proxy_ssl_verify_depth                  {{ $server.ProxySSL.VerifyDepth }}; # OK
         {{ if not (empty $server.ProxySSL.ProxySSLName) }}
-        proxy_ssl_name                          {{ $server.ProxySSL.ProxySSLName }};
-        proxy_ssl_server_name                   {{ $server.ProxySSL.ProxySSLServerName }};
+        proxy_ssl_name                          {{ $server.ProxySSL.ProxySSLName }}; # OK
+        proxy_ssl_server_name                   {{ $server.ProxySSL.ProxySSLServerName }}; # OK
         {{ end }}
         {{ end }}
 
         {{ if not (empty $server.ProxySSL.PemFileName) }}
-        proxy_ssl_certificate                   {{ $server.ProxySSL.PemFileName }};
-        proxy_ssl_certificate_key               {{ $server.ProxySSL.PemFileName }};
+        proxy_ssl_certificate                   {{ $server.ProxySSL.PemFileName }}; # OK
+        proxy_ssl_certificate_key               {{ $server.ProxySSL.PemFileName }}; # OK
         {{ end }}
 
         {{ if not (empty $server.SSLCiphers) }}
-        ssl_ciphers                             {{ $server.SSLCiphers }};
+        ssl_ciphers                             {{ $server.SSLCiphers }}; # OK
         {{ end }}
 
         {{ if not (empty $server.SSLPreferServerCiphers) }}
-        ssl_prefer_server_ciphers               {{ $server.SSLPreferServerCiphers }};
+        ssl_prefer_server_ciphers               {{ $server.SSLPreferServerCiphers }}; # OK
         {{ end }}
 
-        {{ if not (empty $server.ServerSnippet) }}
-        # Custom code snippet configured for host {{ $server.Hostname }}
-        {{ $server.ServerSnippet }}
+        {{ range $errorLocation := (buildCustomErrorLocationsPerServer $server) }} # OK
+        {{ template "CUSTOM_ERRORS" (buildCustomErrorDeps $errorLocation.UpstreamName $errorLocation.Codes $all.EnableMetrics) }} # OK
         {{ end }}
 
-        {{ range $errorLocation := (buildCustomErrorLocationsPerServer $server) }}
-        {{ template "CUSTOM_ERRORS" (buildCustomErrorDeps $errorLocation.UpstreamName $errorLocation.Codes $all.EnableMetrics $all.Cfg.EnableModsecurity) }}
-        {{ end }}
-
-        {{ buildMirrorLocations $server.Locations }}
+        {{ buildMirrorLocations $server.Locations }} # OK
 
         {{ $enforceRegex := enforceRegexModifier $server.Locations }}
         {{ range $location := $server.Locations }}
@@ -945,11 +817,6 @@ stream {
 
             {{ if not $all.Cfg.EnableAuthAccessLog }}
             access_log off;
-            {{ end }}
-
-            # Ensure that modsecurity will not run on an internal location as this is not accessible from outside
-            {{ if $all.Cfg.EnableModsecurity }}
-            modsecurity off;
             {{ end }}
 
             {{ if $externalAuth.AuthCacheKey }}
@@ -1064,11 +931,6 @@ stream {
             {{ template "CORS" $location }}
             {{ end }}
 
-            # Ensure that modsecurity will not run on an internal location as this is not accessible from outside
-            {{ if $all.Cfg.EnableModsecurity }}
-            modsecurity off;
-            {{ end }}
-
             return 302 {{ buildAuthSignURL $externalAuth.SigninURL $externalAuth.SigninURLRedirectParam }};
         }
         {{ end }}
@@ -1126,8 +988,6 @@ stream {
             set $pass_port           $pass_server_port;
 
             set $proxy_alternative_upstream_name "";
-
-            {{ buildModSecurityForLocation $all.Cfg $location }}
 
             {{ if isLocationAllowed $location }}
             {{ if gt (len $location.Denylist.CIDR) 0 }}
@@ -1293,14 +1153,7 @@ stream {
             grpc_read_timeout                       {{ $location.Proxy.ReadTimeout }}s;
             {{ end }}
 
-            {{/* Add any additional configuration defined */}}
-            {{ $location.ConfigurationSnippet }}
-
-            {{ if not (empty $all.Cfg.LocationSnippet) }}
-            # Custom code snippet configured in the configuration configmap
-            {{ $all.Cfg.LocationSnippet }}
-            {{ end }}
-
+ 
             {{ if $location.CustomHeaders }}
             # Custom Response Headers
             {{ range $k, $v := $location.CustomHeaders.Headers }}
