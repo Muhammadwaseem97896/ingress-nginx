@@ -136,5 +136,99 @@ func buildCustomErrorLocation(upstreamName string, errorCodes []int, enableMetri
 	}
 
 	return directives
+}
 
+func (c *Template) buildServerLocations(server *ingress.Server, locations []*ingress.Location) ngx_crossplane.Directives {
+	serverLocations := make(ngx_crossplane.Directives, 0)
+
+	cfg := c.tplConfig.Cfg
+	enforceRegexModifier := false
+	needsRewrite := func(loc *ingress.Location) bool {
+		return loc.Rewrite.Target != "" &&
+			loc.Rewrite.Target != loc.Path
+	}
+
+	for _, location := range locations {
+		if needsRewrite(location) || location.Rewrite.UseRegex {
+			enforceRegexModifier = true
+			break
+		}
+	}
+
+	for _, location := range locations {
+		locationPath := buildLocation(location, enforceRegexModifier)
+		proxySetHeader := getProxySetHeader(location)
+		authPath := buildAuthLocation(location, cfg.GlobalExternalAuth.URL)
+		applyGlobalAuth := shouldApplyGlobalAuth(location, cfg.GlobalExternalAuth.URL)
+		applyAuthUpstream := shouldApplyAuthUpstream(location, cfg)
+		externalAuth := location.ExternalAuth
+		if applyGlobalAuth {
+			externalAuth = cfg.GlobalExternalAuth
+		}
+
+		if location.Rewrite.AppRoot != "" {
+			serverLocations = append(serverLocations,
+				buildBlockDirective("if", []string{"$uri = /"},
+					ngx_crossplane.Directives{
+						buildDirective("return", "302", fmt.Sprintf("$scheme://$http_host%s", location.Rewrite.AppRoot)),
+					}))
+		}
+
+		if authPath != "" {
+
+		}
+
+	}
+
+	return serverLocations
+}
+
+type externalAuth struct {
+	AuthCacheKey      string   `json:"authCacheKey"`
+	AuthCacheDuration []string `json:"authCacheDuration"`
+}
+
+func (c *Template) buildAuthLocation(server *ingress.Server, location *ingress.Location, authPath string, externalA *externalAuth) *ngx_crossplane.Directive {
+	locationDirectives := ngx_crossplane.Directives{
+		buildDirective("internal"),
+	}
+
+	if c.tplConfig.Cfg.EnableOpentelemetry || location.Opentelemetry.Enabled {
+		locationDirectives = append(locationDirectives,
+			buildDirective("opentelemetry", "on"),
+			buildDirective("opentelemetry_propagate"),
+		)
+	}
+
+	if !c.tplConfig.Cfg.EnableAuthAccessLog {
+		locationDirectives = append(locationDirectives, buildDirective("access_log", "off"))
+	}
+
+	if externalA.AuthCacheKey != "" {
+		locationDirectives = append(locationDirectives,
+			buildDirective("$tmp_cache_key", fmt.Sprintf("%s%s%s", server.Hostname, authPath, externalA.AuthCacheKey)),
+			buildDirective("$cache_key", ""),
+			buildDirective("rewrite_by_lua_file", "/etc/nginx/lua/nginx/ngx_conf_rewrite_auth.lua"),
+			buildDirective("proxy_cache", "auth_cache"),
+			buildDirective("proxy_cache_key", "$cache_key"),
+		)
+		for i := range externalA.AuthCacheDuration {
+			locationDirectives = append(locationDirectives,
+				buildDirective("proxy_cache_valid", externalA.AuthCacheDuration[i]),
+			)
+		}
+	}
+
+	/*
+		ngx_auth_request module overrides variables in the parent request,
+		therefore we have to explicitly set this variable again so that when the parent request
+		resumes it has the correct value set for this variable so that Lua can pick backend correctly
+	*/
+	locationDirectives = append(locationDirectives,
+		buildDirective("set", "$proxy_upstream_name", location.Backend),
+	)
+	//// I HAVE STOPPED HERE
+
+	return buildBlockDirective("location",
+		[]string{"=", authPath}, locationDirectives)
 }

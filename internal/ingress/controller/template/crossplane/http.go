@@ -22,6 +22,8 @@ import (
 	"strings"
 
 	ngx_crossplane "github.com/nginxinc/nginx-go-crossplane"
+
+	utilingress "k8s.io/ingress-nginx/pkg/util/ingress"
 )
 
 func (c *Template) initHTTPDirectives() ngx_crossplane.Directives {
@@ -309,10 +311,20 @@ func (c *Template) buildHTTP() {
 			fmt.Sprintf("@custom_upstream-default-backend_%d", v)))
 	}
 
+	if redirectServers, ok := c.tplConfig.RedirectServers.([]*utilingress.Redirect); ok {
+		for _, server := range redirectServers {
+			serverBlock := c.buildRedirectServer(server)
+			httpBlock = append(httpBlock, serverBlock)
+		}
+	}
+
 	for _, server := range c.tplConfig.Servers {
 		serverBlock := c.buildServerDirective(server)
 		httpBlock = append(httpBlock, serverBlock)
 	}
+
+	httpBlock = append(httpBlock, c.buildDefaultBackend())
+	httpBlock = append(httpBlock, c.buildHealthAndStatsServer())
 
 	c.config.Parsed = append(c.config.Parsed, &ngx_crossplane.Directive{
 		Directive: "http",

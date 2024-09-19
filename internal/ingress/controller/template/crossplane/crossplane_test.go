@@ -32,6 +32,7 @@ import (
 	"k8s.io/ingress-nginx/internal/ingress/controller/template/crossplane/extramodules"
 	"k8s.io/ingress-nginx/internal/ingress/resolver"
 	"k8s.io/ingress-nginx/pkg/apis/ingress"
+	utilingress "k8s.io/ingress-nginx/pkg/util/ingress"
 )
 
 const mockMimeTypes = `
@@ -53,6 +54,14 @@ func defaultConfig() *config.TemplateConfig {
 		Default:  8080,
 		SSLProxy: 442,
 	}
+	defaultCertificate := &ingress.SSLCert{
+		PemFileName: "bla.crt",
+		PemCertKey:  "bla.key",
+	}
+	tplConfig.StatusPort = 10246
+	tplConfig.StatusPath = "/status"
+	tplConfig.HealthzURI = "/healthz"
+	tplConfig.Cfg.DefaultSSLCertificate = defaultCertificate
 	return tplConfig
 }
 
@@ -68,7 +77,11 @@ func TestCrossplaneTemplate(t *testing.T) {
 	options := ngx_crossplane.ParseOptions{
 		ErrorOnUnknownDirectives: true,
 		StopParsingOnError:       true,
-		IgnoreDirectives:         []string{"more_clear_headers", "more_set_headers"}, // TODO: Add more_set_headers
+		IgnoreDirectives: []string{"more_clear_headers",
+			"more_set_headers",
+			"opentelemetry_config",
+			"opentelemetry",
+			"opentelemetry_propagate"}, // TODO: Add more_set_headers
 		DirectiveSources: []ngx_crossplane.MatchFunc{
 			ngx_crossplane.DefaultDirectivesMatchFunc,
 			ngx_crossplane.MatchLuaLatest,
@@ -77,10 +90,6 @@ func TestCrossplaneTemplate(t *testing.T) {
 		LexOptions: ngx_crossplane.LexOptions{
 			Lexers: []ngx_crossplane.RegisterLexer{lua.RegisterLexer()},
 		},
-	}
-	defaultCertificate := &ingress.SSLCert{
-		PemFileName: "bla.crt",
-		PemCertKey:  "bla.key",
 	}
 
 	mimeFile, err := os.CreateTemp("", "")
@@ -93,7 +102,6 @@ func TestCrossplaneTemplate(t *testing.T) {
 
 	t.Run("it should be able to marshall and unmarshall the default configuration", func(t *testing.T) {
 		tplConfig := defaultConfig()
-		tplConfig.Cfg.DefaultSSLCertificate = defaultCertificate
 		tplConfig.Cfg.EnableBrotli = true
 		tplConfig.Cfg.HideHeaders = []string{"x-fake-header", "x-another-fake-header"}
 		tplConfig.Cfg.Resolver = resolvers
@@ -120,8 +128,8 @@ func TestCrossplaneTemplate(t *testing.T) {
 	t.Run("it should be able to marshall and unmarshall with server config", func(t *testing.T) {
 		tplConfig := defaultConfig()
 		tplConfig.EnableMetrics = true
-		tplConfig.Cfg.DefaultSSLCertificate = defaultCertificate
 		tplConfig.Cfg.EnableBrotli = true
+		tplConfig.Cfg.EnableOpentelemetry = true
 		tplConfig.Cfg.HideHeaders = []string{"x-fake-header", "x-another-fake-header"}
 		tplConfig.Cfg.Resolver = resolvers
 		tplConfig.Cfg.DisableIpv6DNS = true
@@ -136,6 +144,12 @@ func TestCrossplaneTemplate(t *testing.T) {
 		tplConfig.Cfg.DisableAccessLog = true
 		tplConfig.Cfg.UpstreamKeepaliveConnections = 0
 		tplConfig.Cfg.CustomHTTPErrors = []int{411, 412, 413} // Duplicated on purpose
+		tplConfig.RedirectServers = []*utilingress.Redirect{
+			{
+				From: "www.xpto123.com",
+				To:   "www.abcdefg.tld",
+			},
+		}
 		tplConfig.Servers = []*ingress.Server{
 			{
 				Hostname: "_",
@@ -203,12 +217,11 @@ func TestCrossplaneTemplate(t *testing.T) {
 
 		_, err = ngx_crossplane.Parse(tmpFile.Name(), &options)
 		require.NoError(t, err)
-		// require.Equal(t, "bla", string(content))
+		require.Equal(t, "bla", string(content))
 	})
 
 	t.Run("it should set the right logging configs", func(t *testing.T) {
 		tplConfig := defaultConfig()
-		tplConfig.Cfg.DefaultSSLCertificate = defaultCertificate
 		tplConfig.Cfg.DisableAccessLog = false
 		tplConfig.Cfg.HTTPAccessLogPath = "/lalala.log"
 
@@ -228,7 +241,6 @@ func TestCrossplaneTemplate(t *testing.T) {
 
 	t.Run("it should be able to marshall and unmarshall the specified configuration", func(t *testing.T) {
 		tplConfig := defaultConfig()
-		tplConfig.Cfg.DefaultSSLCertificate = defaultCertificate
 		tplConfig.Cfg.WorkerCPUAffinity = "0001 0010 0100 1000"
 		tplConfig.Cfg.LuaSharedDicts = map[string]int{
 			"configuration_data": 10240,

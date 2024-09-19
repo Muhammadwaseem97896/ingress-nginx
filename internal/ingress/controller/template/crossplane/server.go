@@ -17,10 +17,14 @@ limitations under the License.
 package crossplane
 
 import (
+	"fmt"
 	"strings"
 
 	ngx_crossplane "github.com/nginxinc/nginx-go-crossplane"
+
 	"k8s.io/ingress-nginx/pkg/apis/ingress"
+	utilingress "k8s.io/ingress-nginx/pkg/util/ingress"
+	"k8s.io/utils/ptr"
 )
 
 func (c *Template) buildServerDirective(server *ingress.Server) *ngx_crossplane.Directive {
@@ -32,21 +36,9 @@ func (c *Template) buildServerDirective(server *ingress.Server) *ngx_crossplane.
 		buildDirective("set", "$proxy_upstream_name", "-"),
 		buildDirective("ssl_certificate_by_lua_file", "/etc/nginx/lua/nginx/ngx_conf_certificate.lua"),
 	}
+
 	serverBlock = append(serverBlock, buildListener(*c.tplConfig, server.Hostname)...)
-
-	if len(cfg.BlockUserAgents) > 0 {
-		uaDirectives := buildBlockDirective("if", []string{"$block_ua"}, ngx_crossplane.Directives{
-			buildDirective("return", "403"),
-		})
-		serverBlock = append(serverBlock, uaDirectives)
-	}
-
-	if len(cfg.BlockReferers) > 0 {
-		refDirectives := buildBlockDirective("if", []string{"$block_ref"}, ngx_crossplane.Directives{
-			buildDirective("return", "403"),
-		})
-		serverBlock = append(serverBlock, refDirectives)
-	}
+	serverBlock = append(serverBlock, c.buildBlockers()...)
 
 	if server.Hostname == "_" {
 		serverBlock = append(serverBlock, buildDirective("ssl_reject_handshake", cfg.SSLRejectHandshake))
@@ -75,12 +67,15 @@ func (c *Template) buildServerDirective(server *ingress.Server) *ngx_crossplane.
 
 	serverBlock = append(serverBlock, buildMirrorLocationDirective(server.Locations)...)
 
+	// The other locations should come here!
+	serverBlock = append(serverBlock, c.buildServerLocations(server, server.Locations)...)
+
 	// DO NOT MOVE! THIS IS THE END DIRECTIVE OF SERVERS
 	serverBlock = append(serverBlock, buildCustomErrorLocation("upstream-default-backend", cfg.CustomHTTPErrors, c.tplConfig.EnableMetrics)...)
 
 	return &ngx_crossplane.Directive{
 		Directive: "server",
-		Block:     serverBlock, // TODO: Fix
+		Block:     serverBlock,
 	}
 }
 
@@ -125,5 +120,113 @@ func (c *Template) buildCertificateDirectives(server *ingress.Server) ngx_crossp
 	}
 
 	return certDirectives
+}
 
+// buildRedirectServer builds the server blocks for redirections
+func (c *Template) buildRedirectServer(server *utilingress.Redirect) *ngx_crossplane.Directive {
+	serverBlock := ngx_crossplane.Directives{
+		buildDirective("server_name", server.From),
+		buildDirective("ssl_certificate_by_lua_file", "/etc/nginx/lua/nginx/ngx_conf_certificate.lua"),
+		buildDirective("set_by_lua_file", "$redirect_to", "/etc/nginx/lua/nginx/ngx_srv_redirect.lua", server.To),
+	}
+	serverBlock = append(serverBlock, buildListener(*c.tplConfig, server.From)...)
+	serverBlock = append(serverBlock, c.buildBlockers()...)
+	serverBlock = append(serverBlock, buildDirective("return", c.tplConfig.Cfg.HTTPRedirectCode, "$redirect_to"))
+	return &ngx_crossplane.Directive{
+		Directive: "server",
+		Block:     serverBlock,
+	}
+}
+
+// buildDefaultBackend builds the default catch all server
+func (c *Template) buildDefaultBackend() *ngx_crossplane.Directive {
+	var reusePort *string
+	if c.tplConfig.Cfg.ReusePort {
+		reusePort = ptr.To("reuseport")
+	}
+	serverBlock := ngx_crossplane.Directives{
+		buildDirective("listen", c.tplConfig.ListenPorts.Default, "default_server", reusePort, fmt.Sprintf("backlog=%d", c.tplConfig.BacklogSize)),
+	}
+	if c.tplConfig.IsIPV6Enabled {
+		serverBlock = append(serverBlock, buildDirective(
+			"listen",
+			fmt.Sprintf("[::]:%d", c.tplConfig.ListenPorts.Default),
+			"default_server", reusePort,
+			fmt.Sprintf("backlog=%d", c.tplConfig.BacklogSize),
+		))
+	}
+	serverBlock = append(serverBlock, buildDirective("set", "$proxy_upstream_name", "internal"))
+	serverBlock = append(serverBlock, buildDirective("access_log", "off"))
+	serverBlock = append(serverBlock, buildBlockDirective("location", []string{"/"}, ngx_crossplane.Directives{
+		buildDirective("return", "404"),
+	}))
+
+	return &ngx_crossplane.Directive{
+		Directive: "server",
+		Block:     serverBlock,
+	}
+}
+
+func (c *Template) buildHealthAndStatsServer() *ngx_crossplane.Directive {
+	serverBlock := ngx_crossplane.Directives{
+		buildDirective("listen", fmt.Sprintf("127.0.0.1:%d", c.tplConfig.StatusPort)),
+		buildDirective("set", "$proxy_upstream_name", "internal"),
+		buildDirective("keepalive_timeout", "0"),
+		buildDirective("gzip", "off"),
+		buildDirective("access_log", "off"),
+		buildBlockDirective(
+			"location",
+			[]string{c.tplConfig.HealthzURI}, ngx_crossplane.Directives{
+				buildDirective("return", "200"),
+			}),
+		buildBlockDirective(
+			"location",
+			[]string{"/is-dynamic-lb-initialized"}, ngx_crossplane.Directives{
+				buildDirective("content_by_lua_file", "/etc/nginx/lua/nginx/ngx_conf_is_dynamic_lb_initialized.lua"),
+			}),
+		buildBlockDirective(
+			"location",
+			[]string{c.tplConfig.StatusPath}, ngx_crossplane.Directives{
+				buildDirective("stub_status", "on"),
+			}),
+		buildBlockDirective(
+			"location",
+			[]string{"/configuration"}, ngx_crossplane.Directives{
+				buildDirective("client_max_body_size", luaConfigurationRequestBodySize(c.tplConfig.Cfg)),
+				buildDirective("client_body_buffer_size", luaConfigurationRequestBodySize(c.tplConfig.Cfg)),
+				buildDirective("proxy_buffering", "off"),
+				buildDirective("content_by_lua_file", "/etc/nginx/lua/nginx/ngx_conf_configuration.lua"),
+			}),
+		buildBlockDirective(
+			"location",
+			[]string{"/"}, ngx_crossplane.Directives{
+				buildDirective("return", "404"),
+			}),
+	}
+	if c.tplConfig.Cfg.EnableOpentelemetry {
+		serverBlock = append(serverBlock, buildDirective("opentelemetry", "off"))
+	}
+
+	return &ngx_crossplane.Directive{
+		Directive: "server",
+		Block:     serverBlock,
+	}
+}
+
+func (c *Template) buildBlockers() ngx_crossplane.Directives {
+	blockers := make(ngx_crossplane.Directives, 0)
+	if len(c.tplConfig.Cfg.BlockUserAgents) > 0 {
+		uaDirectives := buildBlockDirective("if", []string{"$block_ua"}, ngx_crossplane.Directives{
+			buildDirective("return", "403"),
+		})
+		blockers = append(blockers, uaDirectives)
+	}
+
+	if len(c.tplConfig.Cfg.BlockReferers) > 0 {
+		refDirectives := buildBlockDirective("if", []string{"$block_ref"}, ngx_crossplane.Directives{
+			buildDirective("return", "403"),
+		})
+		blockers = append(blockers, refDirectives)
+	}
+	return blockers
 }

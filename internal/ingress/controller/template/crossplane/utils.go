@@ -17,16 +17,31 @@ limitations under the License.
 package crossplane
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net"
 	"strconv"
 	"strings"
 
 	ngx_crossplane "github.com/nginxinc/nginx-go-crossplane"
+	networkingv1 "k8s.io/api/networking/v1"
 
 	"k8s.io/ingress-nginx/internal/ingress/controller/config"
 	ing_net "k8s.io/ingress-nginx/internal/net"
 	"k8s.io/ingress-nginx/pkg/apis/ingress"
+)
+
+const (
+	slash                   = "/"
+	nonIdempotent           = "non_idempotent"
+	defBufferSize           = 65535
+	writeIndentOnEmptyLines = true // backward-compatibility
+	httpProtocol            = "HTTP"
+	autoHTTPProtocol        = "AUTO_HTTP"
+	httpsProtocol           = "HTTPS"
+	grpcProtocol            = "GRPC"
+	grpcsProtocol           = "GRPCS"
+	fcgiProtocol            = "FCGI"
 )
 
 type seconds int
@@ -37,6 +52,10 @@ func buildDirective(directive string, args ...any) *ngx_crossplane.Directive {
 		switch v := args[k].(type) {
 		case string:
 			argsVal = append(argsVal, v)
+		case *string:
+			if v != nil {
+				argsVal = append(argsVal, *v)
+			}
 		case []string:
 			argsVal = append(argsVal, v...)
 		case int:
@@ -228,4 +247,75 @@ func httpListener(addresses []string, co []string, tc *config.TemplateConfig, ss
 	}
 
 	return listeners
+}
+
+func luaConfigurationRequestBodySize(cfg config.Configuration) string {
+	size := cfg.LuaSharedDicts["configuration_data"]
+	if size < cfg.LuaSharedDicts["certificate_data"] {
+		size = cfg.LuaSharedDicts["certificate_data"]
+	}
+	size += 1024
+
+	return dictKbToStr(size)
+}
+
+func buildLocation(location *ingress.Location, enforceRegex bool) string {
+	path := location.Path
+	if enforceRegex {
+		return fmt.Sprintf(`~* "^%s"`, path)
+	}
+
+	if location.PathType != nil && *location.PathType == networkingv1.PathTypeExact {
+		return fmt.Sprintf(`= %s`, path)
+	}
+
+	return path
+}
+
+func getProxySetHeader(location *ingress.Location) string {
+	if location.BackendProtocol == grpcProtocol || location.BackendProtocol == grpcsProtocol {
+		return "grpc_set_header"
+	}
+
+	return "proxy_set_header"
+}
+
+func buildAuthLocation(location *ingress.Location, globalExternalAuthURL string) string {
+	if (location.ExternalAuth.URL == "") && (!shouldApplyGlobalAuth(location, globalExternalAuthURL)) {
+		return ""
+	}
+
+	str := base64.URLEncoding.EncodeToString([]byte(location.Path))
+	// removes "=" after encoding
+	str = strings.ReplaceAll(str, "=", "")
+
+	pathType := "default"
+	if location.PathType != nil {
+		pathType = fmt.Sprintf("%s", string(*location.PathType))
+	}
+
+	return fmt.Sprintf("/_external-auth-%v-%v", str, pathType)
+}
+
+// shouldApplyGlobalAuth returns true only in case when ExternalAuth.URL is not set and
+// GlobalExternalAuth is set and enabled
+func shouldApplyGlobalAuth(location *ingress.Location, globalExternalAuthURL string) bool {
+	return location.ExternalAuth.URL == "" &&
+		globalExternalAuthURL != "" &&
+		location.EnableGlobalAuth
+}
+
+// shouldApplyAuthUpstream returns true only in case when ExternalAuth.URL and
+// ExternalAuth.KeepaliveConnections are all set
+func shouldApplyAuthUpstream(location *ingress.Location, cfg config.Configuration) bool {
+	if location.ExternalAuth.URL == "" || location.ExternalAuth.KeepaliveConnections == 0 {
+		return false
+	}
+
+	// Unfortunately, `auth_request` module ignores keepalive in upstream block: https://trac.nginx.org/nginx/ticket/1579
+	// The workaround is to use `ngx.location.capture` Lua subrequests but it is not supported with HTTP/2
+	if cfg.UseHTTP2 {
+		return false
+	}
+	return true
 }
