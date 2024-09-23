@@ -17,7 +17,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.20.2
 	github.com/opencontainers/runc v1.1.14
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
-	github.com/prometheus/client_golang v1.20.3
+	github.com/prometheus/client_golang v1.20.4
 	github.com/prometheus/client_model v0.6.1
 	github.com/prometheus/common v0.59.1
 	github.com/spf13/cobra v1.8.1
@@ -32,12 +32,12 @@ require (
 	gopkg.in/go-playground/pool.v3 v3.1.1
 	gopkg.in/mcuadros/go-syslog.v2 v2.3.0
 	k8s.io/api v0.31.1
-	k8s.io/apiextensions-apiserver v0.31.0
+	k8s.io/apiextensions-apiserver v0.31.1
 	k8s.io/apimachinery v0.31.1
-	k8s.io/apiserver v0.31.0
+	k8s.io/apiserver v0.31.1
 	k8s.io/cli-runtime v0.30.0
 	k8s.io/client-go v0.31.1
-	k8s.io/code-generator v0.31.0
+	k8s.io/code-generator v0.31.1
 	k8s.io/component-base v0.31.1
 	k8s.io/klog/v2 v2.130.1
 	pault.ag/go/sniff v0.0.0-20200207005214-cf7e4d167732
