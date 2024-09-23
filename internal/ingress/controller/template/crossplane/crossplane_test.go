@@ -24,8 +24,11 @@ import (
 	ngx_crossplane "github.com/nginxinc/nginx-go-crossplane"
 	"github.com/stretchr/testify/require"
 
+	"k8s.io/ingress-nginx/internal/ingress/annotations/authreq"
 	"k8s.io/ingress-nginx/internal/ingress/annotations/authtls"
+	"k8s.io/ingress-nginx/internal/ingress/annotations/cors"
 	"k8s.io/ingress-nginx/internal/ingress/annotations/mirror"
+	"k8s.io/ingress-nginx/internal/ingress/annotations/proxy"
 	"k8s.io/ingress-nginx/internal/ingress/annotations/proxyssl"
 	"k8s.io/ingress-nginx/internal/ingress/controller/config"
 	"k8s.io/ingress-nginx/internal/ingress/controller/template/crossplane"
@@ -172,6 +175,36 @@ func TestCrossplaneTemplate(t *testing.T) {
 					{
 						DefaultBackendUpstreamName: "otherthing",
 						CustomHTTPErrors:           []int{403, 404, 403, 409}, // Duplicated on purpose!
+					},
+					{
+						CorsConfig: cors.Config{
+							CorsEnabled:          true,
+							CorsAllowOrigin:      []string{"xpto.com", "*.bla.com"},
+							CorsAllowMethods:     "GET,POST",
+							CorsAllowHeaders:     "XPTO",
+							CorsMaxAge:           600,
+							CorsAllowCredentials: true,
+							CorsExposeHeaders:    "XPTO",
+						},
+						Backend:              "somebackend",
+						ClientBodyBufferSize: "512k",
+						Proxy: proxy.Config{
+							RequestBuffering: "on",
+							BuffersNumber:    10,
+							BufferSize:       "1024k",
+							ProxyHTTPVersion: "1.1",
+						},
+						ExternalAuth: authreq.Config{
+							AuthCacheDuration: []string{"60s"},
+							Host:              "someauth.com",
+							URL:               "http://someauth.com",
+							Method:            "GET",
+							ProxySetHeaders: map[string]string{
+								"someheader": "something",
+							},
+							AuthCacheKey: "blabla",
+							SigninURL:    "http://externallogin.tld",
+						},
 					},
 				},
 			},

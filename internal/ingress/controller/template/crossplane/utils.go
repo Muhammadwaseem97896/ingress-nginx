@@ -17,15 +17,21 @@ limitations under the License.
 package crossplane
 
 import (
+	"crypto/sha1"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
 	ngx_crossplane "github.com/nginxinc/nginx-go-crossplane"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/klog/v2"
 
+	"k8s.io/ingress-nginx/internal/ingress/annotations/parser"
 	"k8s.io/ingress-nginx/internal/ingress/controller/config"
 	ing_net "k8s.io/ingress-nginx/internal/net"
 	"k8s.io/ingress-nginx/pkg/apis/ingress"
@@ -42,6 +48,12 @@ const (
 	grpcProtocol            = "GRPC"
 	grpcsProtocol           = "GRPCS"
 	fcgiProtocol            = "FCGI"
+)
+
+var (
+	nginxSizeRegex                 = regexp.MustCompile(`^\d+[kKmM]?$`)
+	nginxOffsetRegex               = regexp.MustCompile(`^\d+[kKmMgG]?$`)
+	defaultGlobalAuthRedirectParam = "rd"
 )
 
 type seconds int
@@ -291,7 +303,7 @@ func buildAuthLocation(location *ingress.Location, globalExternalAuthURL string)
 
 	pathType := "default"
 	if location.PathType != nil {
-		pathType = fmt.Sprintf("%s", string(*location.PathType))
+		pathType = string(*location.PathType)
 	}
 
 	return fmt.Sprintf("/_external-auth-%v-%v", str, pathType)
@@ -318,4 +330,103 @@ func shouldApplyAuthUpstream(location *ingress.Location, cfg config.Configuratio
 		return false
 	}
 	return true
+}
+
+func isValidByteSize(s string, isOffset bool) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+
+	if isOffset {
+		return nginxOffsetRegex.MatchString(s)
+	}
+
+	return nginxSizeRegex.MatchString(s)
+}
+
+func buildAuthUpstreamName(input *ingress.Location, host string) string {
+	authPath := buildAuthLocation(input, "")
+	if authPath == "" || host == "" {
+		return ""
+	}
+
+	return fmt.Sprintf("%s-%s", host, authPath[2:])
+}
+
+// changeHostPort will change the host:port part of the url to value
+func changeHostPort(newURL, value string) string {
+	if newURL == "" {
+		return ""
+	}
+
+	authURL, err := parser.StringToURL(newURL)
+	if err != nil {
+		klog.Errorf("expected a valid URL but %s was returned", newURL)
+		return ""
+	}
+
+	authURL.Host = value
+
+	return authURL.String()
+}
+
+func buildAuthSignURLLocation(location, authSignURL string) string {
+	hasher := sha1.New() // #nosec
+	hasher.Write([]byte(location))
+	hasher.Write([]byte(authSignURL))
+	return "@" + hex.EncodeToString(hasher.Sum(nil))
+}
+
+func buildAuthSignURL(authSignURL, authRedirectParam string) string {
+	u, err := url.Parse(authSignURL)
+	if err != nil {
+		klog.Errorf("error parsing authSignURL: %v", err)
+		return ""
+	}
+	q := u.Query()
+	if authRedirectParam == "" {
+		authRedirectParam = defaultGlobalAuthRedirectParam
+	}
+	if len(q) == 0 {
+		return fmt.Sprintf("%v?%v=$pass_access_scheme://$http_host$escaped_request_uri", authSignURL, authRedirectParam)
+	}
+
+	if q.Get(authRedirectParam) != "" {
+		return authSignURL
+	}
+
+	return fmt.Sprintf("%v&%v=$pass_access_scheme://$http_host$escaped_request_uri", authSignURL, authRedirectParam)
+}
+
+func buildCorsOriginRegex(corsOrigins []string) ngx_crossplane.Directives {
+	if len(corsOrigins) == 1 && corsOrigins[0] == "*" {
+		return ngx_crossplane.Directives{
+			buildDirective("set", "$http_origin", "*"),
+			buildDirective("set", "$cors", "true"),
+		}
+	}
+
+	originsArray := []string{"$http_origin", "~*"}
+	for i, origin := range corsOrigins {
+		originTrimmed := strings.TrimSpace(origin)
+		if originTrimmed != "" {
+			originsArray = append(originsArray, buildOriginRegex(originTrimmed))
+		}
+		if i != len(corsOrigins)-1 {
+			originsArray = append(originsArray, "|")
+		}
+	}
+
+	return ngx_crossplane.Directives{
+		buildBlockDirective("if", originsArray, ngx_crossplane.Directives{
+			buildDirective("set", "$cors", "true"),
+		}),
+	}
+}
+
+func buildOriginRegex(origin string) string {
+	origin = regexp.QuoteMeta(origin)
+	origin = strings.Replace(origin, "\\*", `[A-Za-z0-9\-]+`, 1)
+	return fmt.Sprintf("(%s)", origin)
 }

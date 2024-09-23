@@ -684,29 +684,29 @@ http {
      {{ if $cors.CorsAllowOrigin }}
         {{ buildCorsOriginRegex $cors.CorsAllowOrigin }}
      {{ end }}
-     if ($request_method = 'OPTIONS') {
-        set $cors ${cors}options;
+     if ($request_method = 'OPTIONS') { # OK
+        set $cors ${cors}options; # OK
      }
 
-     if ($cors = "true") {
-        more_set_headers 'Access-Control-Allow-Origin: $http_origin';
-        {{ if $cors.CorsAllowCredentials }} more_set_headers 'Access-Control-Allow-Credentials: {{ $cors.CorsAllowCredentials }}'; {{ end }}
-        more_set_headers 'Access-Control-Allow-Methods: {{ $cors.CorsAllowMethods }}';
-        more_set_headers 'Access-Control-Allow-Headers: {{ $cors.CorsAllowHeaders }}';
-        {{ if not (empty $cors.CorsExposeHeaders) }} more_set_headers 'Access-Control-Expose-Headers: {{ $cors.CorsExposeHeaders }}'; {{ end }}
-        more_set_headers 'Access-Control-Max-Age: {{ $cors.CorsMaxAge }}';
+     if ($cors = "true") { # OK
+        more_set_headers 'Access-Control-Allow-Origin: $http_origin'; # OK
+        {{ if $cors.CorsAllowCredentials }} more_set_headers 'Access-Control-Allow-Credentials: {{ $cors.CorsAllowCredentials }}'; {{ end }} # OK
+        more_set_headers 'Access-Control-Allow-Methods: {{ $cors.CorsAllowMethods }}'; # OK
+        more_set_headers 'Access-Control-Allow-Headers: {{ $cors.CorsAllowHeaders }}'; # OK
+        {{ if not (empty $cors.CorsExposeHeaders) }} more_set_headers 'Access-Control-Expose-Headers: {{ $cors.CorsExposeHeaders }}'; {{ end }} # OK
+        more_set_headers 'Access-Control-Max-Age: {{ $cors.CorsMaxAge }}'; # OK
      }
 
-     if ($cors = "trueoptions") {
-        more_set_headers 'Access-Control-Allow-Origin: $http_origin';
-        {{ if $cors.CorsAllowCredentials }} more_set_headers 'Access-Control-Allow-Credentials: {{ $cors.CorsAllowCredentials }}'; {{ end }}
-        more_set_headers 'Access-Control-Allow-Methods: {{ $cors.CorsAllowMethods }}';
-        more_set_headers 'Access-Control-Allow-Headers: {{ $cors.CorsAllowHeaders }}';
-        {{ if not (empty $cors.CorsExposeHeaders) }} more_set_headers 'Access-Control-Expose-Headers: {{ $cors.CorsExposeHeaders }}'; {{ end }}
-        more_set_headers 'Access-Control-Max-Age: {{ $cors.CorsMaxAge }}';
-        more_set_headers 'Content-Type: text/plain charset=UTF-8';
-        more_set_headers 'Content-Length: 0';
-        return 204;
+     if ($cors = "trueoptions") { # OK
+        more_set_headers 'Access-Control-Allow-Origin: $http_origin'; # OK
+        {{ if $cors.CorsAllowCredentials }} more_set_headers 'Access-Control-Allow-Credentials: {{ $cors.CorsAllowCredentials }}'; {{ end }} # OK
+        more_set_headers 'Access-Control-Allow-Methods: {{ $cors.CorsAllowMethods }}'; # OK
+        more_set_headers 'Access-Control-Allow-Headers: {{ $cors.CorsAllowHeaders }}'; # OK
+        {{ if not (empty $cors.CorsExposeHeaders) }} more_set_headers 'Access-Control-Expose-Headers: {{ $cors.CorsExposeHeaders }}'; {{ end }} # OK
+        more_set_headers 'Access-Control-Max-Age: {{ $cors.CorsMaxAge }}'; # OK
+        more_set_headers 'Content-Type: text/plain charset=UTF-8'; # OK
+        more_set_headers 'Content-Length: 0'; # OK
+        return 204; # OK
      }
 {{ end }}
 
@@ -795,9 +795,9 @@ http {
         {{ $applyGlobalAuth := shouldApplyGlobalAuth $location $all.Cfg.GlobalExternalAuth.URL }} # OK
         {{ $applyAuthUpstream := shouldApplyAuthUpstream $location $all.Cfg }} # OK
 
-        {{ $externalAuth := $location.ExternalAuth }}
+        {{ $externalAuth := $location.ExternalAuth }} # OK
         {{ if eq $applyGlobalAuth true }}
-        {{ $externalAuth = $all.Cfg.GlobalExternalAuth }}
+        {{ $externalAuth = $all.Cfg.GlobalExternalAuth }} # OK
         {{ end }}
 
         {{ if not (empty $location.Rewrite.AppRoot) }}
@@ -839,64 +839,64 @@ http {
             # resumes it has the correct value set for this variable so that Lua can pick backend correctly
             set $proxy_upstream_name {{ buildUpstreamName $location | quote }}; # OK
 
-            proxy_pass_request_body     off;
-            proxy_set_header            Content-Length          "";
-            proxy_set_header            X-Forwarded-Proto       "";
-            proxy_set_header            X-Request-ID            $req_id;
+            proxy_pass_request_body     off; # OK
+            proxy_set_header            Content-Length          ""; # OK 
+            proxy_set_header            X-Forwarded-Proto       ""; # OK
+            proxy_set_header            X-Request-ID            $req_id; # OK
 
             {{ if $externalAuth.Method }}
-            proxy_method                {{ $externalAuth.Method }};
-            proxy_set_header            X-Original-URI          $request_uri;
-            proxy_set_header            X-Scheme                $pass_access_scheme;
+            proxy_method                {{ $externalAuth.Method }}; 
+            proxy_set_header            X-Original-URI          $request_uri; # OK
+            proxy_set_header            X-Scheme                $pass_access_scheme; # OK
             {{ end }}
 
-            proxy_set_header            Host                    {{ $externalAuth.Host }};
-            proxy_set_header            X-Original-URL          $scheme://$http_host$request_uri;
-            proxy_set_header            X-Original-Method       $request_method;
-            proxy_set_header            X-Sent-From             "nginx-ingress-controller";
-            proxy_set_header            X-Real-IP               $remote_addr;
+            proxy_set_header            Host                    {{ $externalAuth.Host }}; # OK
+            proxy_set_header            X-Original-URL          $scheme://$http_host$request_uri; # OK
+            proxy_set_header            X-Original-Method       $request_method; # OK
+            proxy_set_header            X-Sent-From             "nginx-ingress-controller"; # OK
+            proxy_set_header            X-Real-IP               $remote_addr; # OK
             {{ if and $all.Cfg.UseForwardedHeaders $all.Cfg.ComputeFullForwardedFor }}
-            proxy_set_header            X-Forwarded-For        $full_x_forwarded_for;
+            proxy_set_header            X-Forwarded-For        $full_x_forwarded_for; # OK
             {{ else }}
-            proxy_set_header            X-Forwarded-For        $remote_addr;
+            proxy_set_header            X-Forwarded-For        $remote_addr; # OK
             {{ end }}
 
             {{ if $externalAuth.RequestRedirect }}
-            proxy_set_header            X-Auth-Request-Redirect {{ $externalAuth.RequestRedirect }};
+            proxy_set_header            X-Auth-Request-Redirect {{ $externalAuth.RequestRedirect }}; # OK
             {{ else }}
-            proxy_set_header            X-Auth-Request-Redirect $request_uri;
+            proxy_set_header            X-Auth-Request-Redirect $request_uri; # OK
             {{ end }}
 
             {{ if $externalAuth.AuthCacheKey }}
-            proxy_buffering                         "on";
+            proxy_buffering                         "on"; # OK
             {{ else }}
-            proxy_buffering                         {{ $location.Proxy.ProxyBuffering }};
+            proxy_buffering                         {{ $location.Proxy.ProxyBuffering }}; # OK
             {{ end }}
-            proxy_buffer_size                       {{ $location.Proxy.BufferSize }};
-            proxy_buffers                           {{ $location.Proxy.BuffersNumber }} {{ $location.Proxy.BufferSize }};
-            proxy_request_buffering                 {{ $location.Proxy.RequestBuffering }};
+            proxy_buffer_size                       {{ $location.Proxy.BufferSize }}; # OK
+            proxy_buffers                           {{ $location.Proxy.BuffersNumber }} {{ $location.Proxy.BufferSize }}; # OK
+            proxy_request_buffering                 {{ $location.Proxy.RequestBuffering }}; # OK
 
-            proxy_ssl_server_name       on;
-            proxy_pass_request_headers  on;
+            proxy_ssl_server_name       on; # OK
+            proxy_pass_request_headers  on; # OK
             {{ if isValidByteSize $location.Proxy.BodySize true }}
-            client_max_body_size        {{ $location.Proxy.BodySize }};
+            client_max_body_size        {{ $location.Proxy.BodySize }}; # OK
             {{ end }}
             {{ if isValidByteSize $location.ClientBodyBufferSize false }}
-            client_body_buffer_size     {{ $location.ClientBodyBufferSize }};
+            client_body_buffer_size     {{ $location.ClientBodyBufferSize }}; # OK
             {{ end }}
 
             # Pass the extracted client certificate to the auth provider
             {{ if not (empty $server.CertificateAuth.CAFileName) }}
             {{ if $server.CertificateAuth.PassCertToUpstream }}
-            proxy_set_header ssl-client-cert        $ssl_client_escaped_cert;
+            proxy_set_header ssl-client-cert        $ssl_client_escaped_cert; # OK
             {{ end }}
-            proxy_set_header ssl-client-verify      $ssl_client_verify;
-            proxy_set_header ssl-client-subject-dn  $ssl_client_s_dn;
-            proxy_set_header ssl-client-issuer-dn   $ssl_client_i_dn;
+            proxy_set_header ssl-client-verify      $ssl_client_verify; # OK
+            proxy_set_header ssl-client-subject-dn  $ssl_client_s_dn; # OK
+            proxy_set_header ssl-client-issuer-dn   $ssl_client_i_dn; # OK
             {{ end }}
 
             {{- range $line := buildAuthProxySetHeaders $externalAuth.ProxySetHeaders}}
-            {{ $line }}
+            {{ $line }} # OK
             {{- end }}
 
             {{ if and (eq $applyAuthUpstream true) (eq $applyGlobalAuth false) }}
@@ -905,29 +905,29 @@ http {
             # Connection header is cleared and the HTTP version is set to 1.1 as
             # the Nginx documentation suggests:
             # http://nginx.org/en/docs/http/ngx_http_upstream_module.html#keepalive
-            proxy_http_version 1.1;
-            proxy_set_header Connection "";
-            set $target {{ changeHostPort $externalAuth.URL $authUpstreamName }};
+            proxy_http_version 1.1; # OK
+            proxy_set_header Connection ""; # OK
+            set $target {{ changeHostPort $externalAuth.URL $authUpstreamName }}; # OK
             {{ else }}
-            proxy_http_version {{ $location.Proxy.ProxyHTTPVersion }};
-            set $target {{ $externalAuth.URL }};
+            proxy_http_version {{ $location.Proxy.ProxyHTTPVersion }}; # OK
+            set $target {{ $externalAuth.URL }}; # OK
             {{ end }}
-            proxy_pass $target;
+            proxy_pass $target; # OK
         }
         {{ end }}
 
         {{ if isLocationAllowed $location }}
         {{ if $externalAuth.SigninURL }}
         location {{ buildAuthSignURLLocation $location.Path $externalAuth.SigninURL }} {
-            internal;
+            internal; # OK
 
-            add_header Set-Cookie $auth_cookie;
+            add_header Set-Cookie $auth_cookie; # OK
 
             {{ if $location.CorsConfig.CorsEnabled }}
-            {{ template "CORS" $location }}
+            {{ template "CORS" $location }} # OK
             {{ end }}
 
-            return 302 {{ buildAuthSignURL $externalAuth.SigninURL $externalAuth.SigninURLRedirectParam }};
+            return 302 {{ buildAuthSignURL $externalAuth.SigninURL $externalAuth.SigninURLRedirectParam }}; # OK
         }
         {{ end }}
         {{ end }}
